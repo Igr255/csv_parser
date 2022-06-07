@@ -1,0 +1,451 @@
+#!/bin/sh
+################################
+# Brief: log processor - IOS
+# Author: Igor Hanus (xhanus19)
+################################
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=en_US.UTF-8
+
+help()
+{
+  echo "Použití:"
+  echo "    tradelog [-h|--help]"
+  echo "             [FILTR] [PŘÍKAZ] [LOG [LOG2 [...]]"
+  echo ""
+
+  echo "Volby pro PŘÍKAZ: "
+  echo "  list-tick          výpis seznamu vyskytujících se burzovních symbolů, tzv. \"tickerů\""
+  echo "  profit             výpis celkového zisku z uzavřených pozic"
+  echo "  pos                výpis hodnot aktuálně držených pozic seřazených sestupně dle hodnoty"
+  echo "  last-price         výpis poslední známé ceny pro každý ticker"
+  echo "  hist-ord           výpis histogramu počtu transakcí dle tickeru"
+  echo "  graph-pos          výpis grafu hodnot držených pozic dle tickeru"
+  echo ""
+
+  echo "Volby pro FILTR: "
+  echo "  -a DATETIME        after: jsou uvažovány pouze záznamy PO tomto datu (bez tohoto data)"
+  echo "  -b DATETIME        before: jsou uvažovány pouze záznamy PŘED tímto datem (bez tohoto data)"
+  echo "  -t TICKER          jsou uvažovány pouze záznamy odpovídající danému tickeru"
+  echo "  -w WIDTH           u výpisu grafů nastavuje jejich šířku, tedy délku nejdelšího řádku na WIDTH"
+  echo ""
+}
+# Init filters are initial helper filters that are later used to get maximum values / other filters in main functions
+# Max functions are used to get maximum value that is later used in the main functions as a variable
+getGraphInitFilter()
+{
+  INITFILTER=$(printf "%s\n" "$LOGS" | awk "/${TICKER}/" | sort -t';' -k 2,2 | awk -F ';' '!(var = col[$2]++) \
+  {
+    {
+      if (var == 0 && sum != "") {
+        printf(";%0.2f\n",sum * last)
+      }
+    }
+      printf($2)
+    }
+  {
+    if(var != 0) {
+      if($3 == "buy") {
+        sum += $6
+      }
+      else {
+        sum -= $6
+      }
+    }
+    else {
+      if($3 == "buy") {
+        sum = $6
+      }
+      else {
+        sum =- $6
+      }
+    }
+    last = $4
+  }
+  END{printf(";%0.2f\n",sum * last)
+  }')
+}
+
+getMaxGraph()
+{
+  MAX=$(printf "%s\n" "$INITFILTER" | awk -F ';' 'BEGIN \
+  {
+    if($2 < 0) {
+      max =- $2
+    }
+    else {
+      max = $2
+    }
+  }
+  {
+    if($2 < 0) {
+      $2 =- $2
+      }
+  }
+  {
+    if(max < $2) {
+      max = $2
+    }
+  }
+  END{printf("%0.2f",max)}')
+}
+
+getHisInitFilter()
+{
+  INITFILTER=$(printf "%s\n" "$LOGS" | awk "/${TICKER}/" | sort -t';' -k 2,2 | awk -F ';' '!(var = col[$2]++) \
+  {
+    {
+      if (var == 0 && count != 0) {
+        printf(";%i\n",count)
+      }
+    }
+      printf($2)
+  }
+  {
+    if(var != 0) {
+      if($3 == "buy" || $3 == "sell") {
+        count += 1
+      }
+      else {
+        count++
+      }
+    }
+    else {
+      count = 1
+    }
+  }
+  END{printf(";%i\n",count)
+  }')
+}
+
+getMaxHist()
+{
+  MAX=$(printf "%s\n" "$INITFILTER" | awk -F ';' 'BEGIN{max = 0} { if($2 > max) { max = $2 } } END{ print max }')
+}
+
+getPosInitFilter()
+{
+  INITFILTER=$(printf "%s\n" "$LOGS" | awk "/${TICKER}/" | sort -t';' -k 2,2 | awk -F ';' '!(var = col[$2]++) \
+  {
+    {
+      if (var == 0 && sum != "") {
+        printf(";%0.2f\n",sum*last)
+      }
+    }
+    printf($2)
+  }
+  {
+    if(var != 0) {
+      if($3 == "buy") {
+        sum += $6
+      }
+      else {
+        sum -= $6
+      }
+    }
+    else {
+        if($3 == "buy") {
+          sum = $6
+        }
+        else {
+          sum =- $6
+        }
+    }
+    last = $4
+  }
+  END{printf(";%0.2f\n",sum * last)}')
+}
+
+getPosLargestNum()
+{
+  MAX=$(printf "%s\n" "$INITFILTER" | awk -F ';' 'BEGIN{max = 0} {if(length($2) > max){max = length($2)}} END{print max}')
+}
+
+printLog()
+{
+  if [ "$CMD" != "" ]
+    then
+
+      if [ "$CMD" = "LSTTCK" ]
+        then
+          printf "%s\n" "$LOGS" | awk -F ';' '{ if($1 != "") print $2}' | sort | uniq
+      fi
+
+      if [ "$CMD" = "PROFIT" ]
+        then
+          printf "%s\n" "$LOGS" | awk "/${TICKER}/" | awk -F ';' '{if ($3 == "sell") sum += $4 * $6; else sum -= $4 * $6;} END {printf("%0.2f\n", sum)}'
+      fi
+
+      if [ "$CMD" = "LASTPRICE" ]
+        then
+          printf "%s\n" "$LOGS" |awk "/${TICKER}/" | sort -t';' -k 2,2 | awk -F ';' '!(var = col[$2]++) \
+          {
+            {
+              if (var==0 && sum != "") {
+                printf(";%0.2f\n",last)
+              }
+            }
+            printf($2)
+          }
+          {
+            if(var != 0) {
+              if($3 == "buy") {
+                sum += $6
+              }
+              else {
+                sum -= $6
+              }
+            }
+            else {
+              if($3 == "buy") {
+                sum = $6
+              }
+              else {
+                sum =- $6
+              }
+            }
+            last = $4
+          }
+          END{printf(";%0.2f\n",last)
+          }' |  sort -t ';' -nrk2 | awk -F ';' 'NR==1{ first = length($2) } { len = length($1) }
+            { printf($1) } \
+            {
+              for(i = 1;i < 11 - len;i++) {
+                printf(" ")
+              }
+            }
+            { printf(": ") }
+            {
+              for(i = 0;i<first - length($2);i++) {
+                printf(" ")
+              }
+            } { printf("%0.2f\n",$2) }' | sort -k1
+      fi
+
+      if [ "$CMD" = "POS" ]
+        then
+          getPosInitFilter
+          getPosLargestNum
+          printf "%s\n" "$INITFILTER" | sort -t ';' -nrk2  | awk -v max=$MAX  -F ';' '{ len = length($1) } { printf($1)}
+            {
+              for(i=1;i<11-len;i++) {
+                printf(" ")
+              }
+            }
+            {
+              printf(": ")
+            }
+            {
+              for(i=0;i<max - length($2);i++) {
+                printf(" ")
+              }
+            }
+            {
+            printf("%0.2f\n",$2)
+            }'
+      fi
+
+      if [ "$CMD" = "HISTORD" ]
+        then
+          getHisInitFilter
+          if [ "$ISWIDTH" = "1" ]
+            then
+              getMaxHist
+            else
+              MAX=1
+              WIDTH=1
+          fi
+
+          printf "%s\n" "$INITFILTER" | awk -F ';' -v width=$WIDTH -v max=$MAX '
+            BEGIN{ width = max/width; if(width==0) width=1 } { len = length($1) }
+            {
+              printf($1)
+            }
+            {
+              for(i = 1;i<11 - len;i++) {
+                printf(" ")
+              }
+            }
+            {
+              if(int($2 / width) != 0) {
+                printf ": "
+              }
+              else {
+                printf ":"
+              }
+            }
+            {
+              for(i = 0;i<int($2 / width);i++) {
+                printf("#")
+              }
+            }
+            {
+              printf("\n")
+            }'
+      fi
+
+       if [ "$CMD" = "GRAPHPOS" ]
+        then
+          getGraphInitFilter
+          if [ "$ISWIDTH" = "1" ]
+          then
+            getMaxGraph
+          else
+            MAX=1000
+            WIDTH=1
+          fi
+
+          printf "%s\n" "$INITFILTER" | awk -F ';' -v width=$WIDTH -v max=$MAX '
+            BEGIN{ width = max/width; if( width == 0 ) width = 1 }    { len = length($1) }
+            {
+              printf($1)
+            }
+            {
+              for(i = 1;i<11 - len;i++) {
+                printf(" ")
+              }
+            }
+            {
+              if(int($2 / width) != 0) {
+                printf ": "
+              }
+              else {
+                printf ":"
+              }
+            }
+            {
+              if($2 < 0) {
+                $2 =- $2; abs = 1
+              }
+              else {
+                abs = 0
+              }
+            }
+            {
+              for(i = 0;i<(int($2 / width));i++) {
+                if(abs) {
+                  printf("!")
+                }
+                else {
+                  printf("#")
+                }
+              }
+            }
+            {
+              printf("\n")
+            }'
+      fi
+
+    else
+      printf "%s\n" "$LOGS" | awk "/${TICKER}/"
+  fi
+}
+
+filterByTime()
+{
+  LOGS=$(printf "%s\n" "$LOGS" | awk -F ';' -v after="$AFTER" -v before="$BEFORE" '{if($1 > after && $1 < before)print}')
+}
+
+NL='
+'
+MAX=1
+CMD=""
+TICKER=" "
+LOGS=""
+WIDTH=1
+ISWIDTH=0
+BEFORE="9999-99-99 24:59:59"
+AFTER="0"
+
+INITFILTER=""
+
+if [ ! -t 0  ]
+  then
+    LOGS="$(cat)"
+  else
+    if [ -z "$1" ]
+      then
+        echo "Are you lost ?"
+        echo "Try using ./tradelog -h"
+        exit 1
+    fi
+fi
+
+while [ "$#" -gt 0 ]
+ do
+  case "$1" in
+  list-tick)
+    CMD="${CMD}LSTTCK"
+  ;;
+  profit)
+    CMD="${CMD}PROFIT"
+  ;;
+  pos)
+    CMD="${CMD}POS"
+  ;;
+  last-price)
+    CMD="${CMD}LASTPRICE"
+  ;;
+  hist-ord)
+    CMD="${CMD}HISTORD"
+  ;;
+  graph-pos)
+    CMD="${CMD}GRAPHPOS"
+  ;;
+  -b)
+    shift
+    BEFORE="$1"
+  ;;
+  -a)
+    shift
+    AFTER="$1"
+  ;;
+  -t)
+    shift
+    if [ "$TICKER" = " " ]
+      then
+        TICKER=";$1;"
+      else
+        TICKER="${TICKER}|;$1;"
+    fi
+  ;;
+  -w)
+    shift
+    WIDTH=$1
+    ISWIDTH=1
+  ;;
+  -h | --help)
+    help
+  ;;
+  *.log.gz)
+    if [ "$LOGS" = "" ]
+      then
+        LOGS="${LOGS}$(zcat "$1")"
+      else
+        LOGS="${LOGS}\n$(zcat "$1")"
+    fi
+  ;;
+  *.log)
+    if [ "$LOGS" = "" ]
+      then
+        LOGS="${LOGS}$(cat "$1")"
+      else
+        LOGS="${LOGS}$NL$(cat "$1")"
+    fi
+  ;;
+  *)
+    echo "ERROR: $1 not recognized"
+    exit 1
+  ;;
+  esac
+  shift
+done
+
+if [ "$AFTER" != "" ] || [ "$BEFORE" != "9999-99-99 24:59:59" ]
+  then
+    filterByTime
+fi
+
+if [ "$LOGS" != "" ] || [ "$CMD" = "PROFIT" ]
+  then
+    printLog
+fi
